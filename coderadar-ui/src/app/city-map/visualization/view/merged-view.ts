@@ -178,7 +178,7 @@ export class MergedView extends AbstractView {
               this.createBlock(
                 node,
                 parent,
-                VisualizationConfig.COLOR_UNCHANGED_FILE,
+                ColorHelper.colorFromHex(VisualizationConfig.COLOR_UNCHANGED_FILE),
                 orangeEdgeLength,
                 bottom,
                 orangeHeight,
@@ -204,7 +204,7 @@ export class MergedView extends AbstractView {
           this.createBlock(
             node,
             parent,
-            VisualizationConfig.COLOR_DELETED_FILE,
+            ColorHelper.colorFromHex(VisualizationConfig.COLOR_DELETED_FILE),
             blueEdgeLength,
             bottom,
             blueHeight,
@@ -220,7 +220,7 @@ export class MergedView extends AbstractView {
           this.createBlock(
             node,
             parent,
-            VisualizationConfig.COLOR_ADDED_FILE,
+            ColorHelper.colorFromHex(VisualizationConfig.COLOR_ADDED_FILE),
             orangeEdgeLength,
             bottom,
             orangeHeight,

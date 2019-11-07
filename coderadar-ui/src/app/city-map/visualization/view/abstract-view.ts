@@ -1,12 +1,17 @@
 import {INode} from '../../interfaces/INode';
 import {IPackerElement} from '../../interfaces/IPackerElement';
 import {VisualizationConfig} from '../../VisualizationConfig';
-import {BoxGeometry, Geometry, Mesh, MeshLambertMaterial} from 'three';
+import {
+  InstancedBufferAttribute, InstancedBufferGeometry, Vector3,
+  Mesh, Color,
+  Material, ShaderMaterial, BoxBufferGeometry, ShaderMaterialParameters,REVISION
+} from 'three';
 import {IMetricMapping} from '../../interfaces/IMetricMapping';
 import {ScreenType} from '../../enum/ScreenType';
 import {NodeType} from '../../enum/NodeType';
 import {CommitReferenceType} from '../../enum/CommitReferenceType';
 import {ElementAnalyzer} from '../../helper/element-analyzer';
+import {buffer} from "rxjs/operators";
 
 declare var GrowingPacker: any;
 
@@ -14,20 +19,116 @@ export abstract class AbstractView {
 
   rootNode: INode;
   blockElements: Mesh[] = [];
+  userData: any[] = [];
+  //Instancing Attributes
+  blockPositions: number[] = [];
+  blockScales: number[] = [];
+  blockColors: number[] = [];
+
   packer = new GrowingPacker();
 
   minModuleLevel = 1;
   maxModuleLevel: number;
 
-  geometry: Geometry;
+  geometry: InstancedBufferGeometry;
+  blockMaterial:Material ;
+  pickMaterial:Material;
+  blockMesh: Mesh;
+
+  vertexShaderSource: string =
+    "attribute vec3 instancePosition;\n" +
+    "attribute vec3 instanceScale;\n" +
+    "attribute vec3 instanceColor;\n" +
+    "attribute float instanceID;\n" +
+    //"uniform float numberOfInstances;\n" +
+    "\n" +
+    "varying vec3 vColor;\n" +
+    "\n" +
+    "vec3 applyTRS(vec3 position,vec3 translation, vec3 scale ) {\n" +
+    "\tposition*=scale;\n" +
+    "\treturn position+translation;\n" +
+    "\n" +
+    "}\n" +
+    "\n" +
+    "void main(){\n" +
+    "\n" +
+    "#ifdef PICKING\n" +
+    "\tvColor = instanceColor\n" +
+    "#else\n" +
+    "\tvColor = instanceColor;\n"+//*(instanceID/numberOfInstances);\n" +
+    "#endif\n" +
+    "\n" +
+    "\tvec3 transformed = applyTRS(position,instancePosition, instanceScale );\n" +
+    "\n" +
+    "\tgl_Position = projectionMatrix * modelViewMatrix * vec4( transformed, 1.0 );\n" +
+    "\n" +
+    "}";
+  fragmentShaderSource: string =
+    "\t\tprecision highp float;\n" +
+    "\t\tvarying vec3 vColor;\n" +
+    "\n" +
+    "\t\tvoid main() {\n" +
+    "\n" +
+    "\t\t\tgl_FragColor = vec4( vColor, 1.0 );\n" +
+    "\n" +
+    "\t\t}\n";
 
   constructor(protected screenType: ScreenType, protected metricMapping: IMetricMapping) {
-    this.geometry = new BoxGeometry(1, 1, 1);
-    this.geometry.translate(0.5, 0.5, 0.5);
+    this.initMaterial();
+  }
+
+  initMaterial(){
+    this.blockMaterial = new ShaderMaterial(
+      {
+        //uniforms:{numberOfInstances:{value:100.0}},
+        vertexShader:this.vertexShaderSource,
+        fragmentShader:this.fragmentShaderSource
+      }
+    );
+    this.blockMaterial.name = "Instanced Shader Material";
+    this.pickMaterial  = new ShaderMaterial(
+      {
+        //uniforms:{numberOfInstances:{value:100}},
+        vertexShader:"define"+this.vertexShaderSource,
+        fragmentShader:this.fragmentShaderSource
+      }
+    );
+  }
+
+  initMesh(){
+    if(!(this.geometry == null)){
+      this.geometry.dispose();
+    }
+    var bufferGeometry = new BoxBufferGeometry(1,1,1);
+    this.geometry = new InstancedBufferGeometry();
+    this.geometry.index = bufferGeometry.index;
+    this.geometry.attributes.position = bufferGeometry.attributes.position;
+    this.geometry.translate(0.5,0.5,0.5);
+    //Attributes
+    //Position
+    this.geometry.addAttribute('instancePosition',new InstancedBufferAttribute(new Float32Array(this.blockPositions),3));
+    //Scale
+    this.geometry.addAttribute('instanceScale',new InstancedBufferAttribute(new Float32Array(this.blockScales),3));
+    //Color
+    this.geometry.addAttribute('instanceColor',new InstancedBufferAttribute(new Float32Array(this.blockColors),3));
+
+    this.geometry.addAttribute('instanceID',new InstancedBufferAttribute(new Int32Array(this.blockScales.length),1));
+    //TODO add instance id to shader
+
+    this.blockMesh = new Mesh(this.geometry,this.blockMaterial);
+    this.blockMesh.name = "Instanced Mesh";
   }
 
   setMetricTree(root: INode) {
     this.rootNode = root;
+  }
+
+  private updateUniforms(){
+    this.blockMaterial.setValues({
+      uniforms:{
+        //numberOfInstances:{value:this.userData.length}
+      }
+    } as ShaderMaterialParameters);
   }
 
   recalculate() {
@@ -39,6 +140,9 @@ export abstract class AbstractView {
 
     this.calculateGroundAreas([this.rootNode]);
     this.calculateElements([this.rootNode], null, 0);
+    //this.updateUniforms();
+    this.initMesh();
+    //console.log("Debug Data\nMesh:"+this.blockMesh.name+"\nMaterial:"+this.blockMaterial.name+"\nPositions:"+this.blockPositions+"\nScales:"+this.blockScales+"\nColors:"+this.blockColors);
   }
 
   calculateGroundAreas(nodes: INode[]) {
@@ -86,7 +190,7 @@ export abstract class AbstractView {
   createBlock(
     node: INode,
     parent: INode,
-    color: any,
+    color: Color,
     edgeLength: number,
     bottom: number,
     height: number,
@@ -102,7 +206,6 @@ export abstract class AbstractView {
     let finalHeight;
     let finalDepth;
 
-    const cube = this.createCubeGeometry(color, isTransparent, node.name);
     finalX = node.packerInfo.fit.x + (parent ? parent.packerInfo.renderedX : 0) + VisualizationConfig.BLOCK_SPACING;
     finalY = bottom;
     finalZ = node.packerInfo.fit.y + (parent ? parent.packerInfo.renderedY : 0) + VisualizationConfig.BLOCK_SPACING;
@@ -115,30 +218,13 @@ export abstract class AbstractView {
     finalHeight = height;
     finalDepth = node.type === NodeType.FILE ? edgeLength : node.packerInfo.h - 2 * VisualizationConfig.BLOCK_SPACING;
 
-    cube.position.x = finalX;
-    cube.position.y = finalY;
-    cube.position.z = finalZ;
+    this.userData.push(this.createUserData(node, parent, bottom, isTransparent, metrics, commitType, changeTypes));
 
-    cube.scale.x = finalWidth;
-    cube.scale.y = finalHeight;
-    cube.scale.z = finalDepth;
-
-    cube.userData = this.createUserData(node, parent, bottom, isTransparent, metrics, commitType, changeTypes);
-
-    this.blockElements.push(cube);
-  }
-
-  createCubeGeometry(color: string, isTransparent: boolean, name: string): Mesh {
-    const material = new MeshLambertMaterial({color});
-
-    if (isTransparent) {
-      material.transparent = true;
-      material.opacity = 0.4;
-    }
-
-    const block = new Mesh(this.geometry, material);
-    block.name = name;
-    return block;
+    //this.blockElements.push(cube);
+    this.blockPositions.push(finalX,finalY,finalZ);
+    this.blockScales.push(finalWidth,finalHeight,finalDepth);
+    var finalColor = color;
+    this.blockColors.push(finalColor.r,finalColor.g,finalColor.b);
   }
 
   createUserData(
@@ -166,6 +252,31 @@ export abstract class AbstractView {
     return this.blockElements;
   }
 
+  getInstancedMesh(): Mesh{
+    return this.blockMesh;
+  }
+
+  getObjectByName(name:string): number{
+    for(var i=0;i<this.userData.length;i++){
+      if(this.userData[i]["elementName"]==name){
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  getObjectPosition(id:number):number[]{
+    return this.blockPositions.slice(id*3,id*3+3);
+  }
+
+  getObjectScale(id:number):number[]{
+    return this.blockScales.slice(id*3,id*3+3);
+  }
+
+  getObjectColor(id:number):number[]{
+    return this.blockColors.slice(id*3,id*3+3);
+  }
+
   private getEdgeLength(commit1Metrics: any, commit2Metrics: any): number {
     const groundAreaValue = ElementAnalyzer.getMaxMetricValueByMetricName(
       commit1Metrics,
@@ -173,5 +284,12 @@ export abstract class AbstractView {
       this.metricMapping.groundAreaMetricName
     );
     return Math.sqrt(groundAreaValue);
+  }
+
+  resetScene() {
+    this.blockPositions = [];
+    this.blockScales = [];
+    this.blockColors = [];
+    this.blockColors = [];
   }
 }

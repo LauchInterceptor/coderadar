@@ -21,6 +21,7 @@ import {ViewType} from '../../enum/ViewType';
 import {BlockConnection} from '../../geometry/block-connection';
 import {NodeType} from '../../enum/NodeType';
 import {ElementAnalyzer} from '../../helper/element-analyzer';
+import {translateStatement} from "@angular/compiler-cli/src/ngtsc/translator";
 
 @Component({
   selector: 'app-screen',
@@ -75,6 +76,7 @@ export class ScreenComponent implements OnInit, OnChanges, OnDestroy {
         }
         document.querySelector('#stage').classList.add('split');
       }
+
 
       this.resetScene();
       this.prepareView(this.metricTree);
@@ -131,6 +133,13 @@ export class ScreenComponent implements OnInit, OnChanges, OnDestroy {
     this.renderer.setClearColor(0xf0f0f0);
     this.renderer.setSize(this.getScreenWidth() - 0, window.innerHeight);
 
+    if(this.renderer.extensions.get('ANGLE_instanced_arrays') === null){
+      console.debug("GPU Instancing not supported");
+    }else{
+      console.debug("GPU Instancing is supported");
+    }
+
+
     document.querySelector('#stage').appendChild(this.renderer.domElement);
   }
 
@@ -163,12 +172,13 @@ export class ScreenComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   resetCamera() {
-    const root = this.scene.getObjectByName('root');
+    const root = this.view.getObjectByName('root');
     // pythagoras
-    const diagonal = Math.sqrt(Math.pow(root.scale.x, 2) + Math.pow(root.scale.z, 2));
-    this.camera.position.x = root.scale.x * 2;
+    var rootScale = this.view.getObjectScale(root);
+    const diagonal = Math.sqrt(Math.pow(rootScale[0], 2) + Math.pow(rootScale[2], 2));
+    this.camera.position.x = rootScale[0] * 2;
     this.camera.position.y = diagonal * 1.5;
-    this.camera.position.z = root.scale.z * 2;
+    this.camera.position.z = rootScale[2] * 2;
   }
 
   createControls() {
@@ -188,9 +198,20 @@ export class ScreenComponent implements OnInit, OnChanges, OnDestroy {
     });
 
     this.controls.update();
+    this.objectPicking()
+    this.renderer.setRenderTarget(null);
+    var date = new Date();
+    var tStartRender = date.getMilliseconds();
     this.renderer.render(this.scene, this.camera);
+    var tEndRender = date.getMilliseconds();
+    var tRender = tEndRender - tStartRender;
+    console.log("Took "+tRender+"ms to render");
     this.interactionHandler.update(this.camera);
     TWEEN.update();
+  }
+
+  objectPicking(){
+
   }
 
   pauseRendering() {
@@ -214,9 +235,7 @@ export class ScreenComponent implements OnInit, OnChanges, OnDestroy {
     }
     this.view.setMetricTree(metricTree);
     this.view.recalculate();
-    this.view.getBlockElements().forEach((element) => {
-      this.scene.add(element);
-    });
+    this.scene.add(this.view.getInstancedMesh());
 
     if (this.view instanceof MergedView) {
       this.view.calculateConnections(this.scene);
@@ -237,6 +256,7 @@ export class ScreenComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   resetScene() {
+    this.view.resetScene();
     for (let i = this.scene.children.length - 1; i >= 0; i--) {
       const child = this.scene.children[i];
 
@@ -248,45 +268,50 @@ export class ScreenComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   focusElementByName(elementName) {
-    const element = this.scene.getObjectByName(elementName);
+    const element = this.view.getObjectByName(elementName);
+    var elementPosition = this.view.getObjectPosition(element);
+    var elementScale = this.view.getObjectScale(element);
     if (!element) {
       return;
     }
 
-    const root = this.scene.getObjectByName('root');
+    const root = this.view.getObjectByName('root');
+
+    var rootScale = this.view.getObjectScale(root);
     // pythagoras
-    const diagonal = Math.sqrt(Math.pow(root.scale.x, 2) + Math.pow(root.scale.z, 2));
+    const diagonal = Math.sqrt(Math.pow(rootScale[0], 2) + Math.pow(rootScale[2], 2));
 
     new TWEEN.Tween(this.camera.position)
       .to({
-        x: element.position.x + root.scale.x / 5,
-        y: element.position.y + diagonal / 5,
-        z: element.position.z + root.scale.z / 5
+        x: elementPosition[0] + rootScale[0] / 5,
+        y: elementPosition[1] + diagonal / 5,
+        z: elementPosition[2] + rootScale[2] / 5
       }, VisualizationConfig.CAMERA_ANIMATION_DURATION)
       .easing(TWEEN.Easing.Sinusoidal.InOut)
       .start();
 
     new TWEEN.Tween(this.controls.target)
       .to({
-        x: element.position.x + element.scale.x / 2,
-        y: element.position.y,
-        z: element.position.z + element.scale.z / 2
+        x: elementPosition[0] + elementScale[0] / 2,
+        y: elementPosition[1],
+        z: elementPosition[2] + elementScale[2] / 2
       }, VisualizationConfig.CAMERA_ANIMATION_DURATION)
       .easing(TWEEN.Easing.Sinusoidal.InOut)
       .start();
   }
 
   private getCentralCoordinates() {
-    const root = this.scene.getObjectByName('root');
-    if (!root) {
+    const root = this.view.getObjectByName('root');
+    var rootScale = this.view.getObjectScale(root);
+    if (root==-1) {
       console.warn(`no root found in screen #${this.screenType}`);
       return;
     }
 
     return {
-      x: root.scale.x / 2,
+      x: rootScale[0] / 2,
       y: 0,
-      z: root.scale.z / 2
+      z: rootScale[2] / 2
     };
   }
 
